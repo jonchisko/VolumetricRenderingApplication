@@ -5,9 +5,9 @@ Shader "Unlit/BallVolume_Shader"
 {
     Properties
     {
-        _RayMarchSteps ("RayMarch Steps", Int) = 512
-        _StepSize ("Step Size", Float) = 0.1
         _ObjectColor ("Color", Color) = (0.1, 0.1, 0.1, 1.0)
+        _Gloss ("Gloss", Color) = (1.0, 1.0, 1.0, 1.0)
+        _SpecularPower ("Spec Power", Range(0.001, 10)) = 0.1
         _Center ("Sphere Center", Vector) = (0, 0, 0, 0)
         _Radius ("Sphere Radius", Float) = 1
         _FakeLight ("Fake Light", Color) = (0.2, 0.1, 0.0, 1.0)
@@ -25,6 +25,9 @@ Shader "Unlit/BallVolume_Shader"
 
             #include "UnityCG.cginc"
 
+            #define MIN_DISTANCE 0.001
+            #define STEPS 1024
+
             struct appdata
             {
                 float4 vertex : POSITION;
@@ -37,39 +40,51 @@ Shader "Unlit/BallVolume_Shader"
                 float4 pos : SV_POSITION;
             };
 
-            int _RayMarchSteps;
-            float _StepSize;
-            float4 _ObjectColor;
+            fixed4 _ObjectColor;
+            fixed4 _Gloss;
             float4 _Center;
             float _Radius;
+            float _SpecularPower;
             fixed4 _FakeLight;
 
-            bool sphereHit(float3 position)
+            float sphereSFD(float3 position)
             {
-                return distance(position, _Center.xyz) < _Radius;
+                return distance(position, _Center.xyz) - _Radius;
             }
 
             float3 raymarchHitSphere(float3 position, float3 direction)
             {
                 int i = 0;
-                while (i < _RayMarchSteps) 
+                while (i < STEPS)
                 {
-                    float3 stepT = i * _StepSize;
-                    position = position + stepT * direction;
-                    if (sphereHit(position)) 
+                    float sfd = sphereSFD(position);
+                    if (sfd <= MIN_DISTANCE) 
                     {
                         return position;
                     }
+                    position = position + sfd * direction;
                     i++;
                 }
                 return float3(0.0, 0.0, 0.0);
             }
 
-            fixed4 applySimpleLight(float3 worldPosition, float3 lightPosition)
+            fixed4 applySimpleLight(float3 worldPosition, float3 lightPosition, float3 viewDirection)
             {
                 float3 fromCenterToSurface = normalize(worldPosition - _Center);
-                float3 lightDir = -normalize(_Center - lightPosition);
-                return clamp(dot(fromCenterToSurface, lightDir), 0.0, 1.0) * _FakeLight;
+                float3 lightDir = -normalize(worldPosition - lightPosition);
+                float3 h = (lightDir - viewDirection ) / 2;
+                return _ObjectColor + clamp(dot(fromCenterToSurface, lightDir), 0.0, 1.0) * _FakeLight + pow(dot(h, fromCenterToSurface), _SpecularPower) *_Gloss;
+            }
+
+            fixed4 rayMarch(float3 vertexWorld, float3 viewDirection)
+            {
+                fixed4 col = fixed4(0, 0, 0, 0);
+                float3 hitPosition = raymarchHitSphere(vertexWorld, viewDirection);
+                if (distance(hitPosition, float3(0, 0, 0) > 0))
+                {
+                    col = applySimpleLight(hitPosition, _WorldSpaceLightPos0, viewDirection);
+                }
+                return col;
             }
 
             v2f vert (appdata v)
@@ -83,13 +98,7 @@ Shader "Unlit/BallVolume_Shader"
             fixed4 frag(v2f i) : SV_Target
             {
                 float3 viewDirection = normalize(i.vertexWorld - _WorldSpaceCameraPos);
-                fixed4 col = fixed4(0, 0, 0, 0);
-                float3 hitPosition = raymarchHitSphere(i.vertexWorld, viewDirection);
-                if (distance(hitPosition, float3(0, 0, 0) > 0))
-                {
-                    col = _ObjectColor + applySimpleLight(hitPosition, _WorldSpaceLightPos0);
-                }
-                return col;
+                return rayMarch(i.vertexWorld, viewDirection);
             }
             ENDCG
         }
